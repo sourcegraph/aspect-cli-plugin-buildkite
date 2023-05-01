@@ -1,27 +1,30 @@
-# Template: aspect-cli plugin in Go
+# Buildkite plugin for aspect-cli
 
-This repo provides the fastest way to make a plugin for the [aspect cli](https://aspect.build/cli).
+This repo provides a [Buildkite](https://buildkite.com) plugin for the [aspect cli](https://aspect.build/cli).
 
-It contains a plugin written in Go, with a GitHub actions CI/CD pipeline to release it.
+## Status 
 
-More details about aspect cli plugins is on the [plugin documentation](https://docs.aspect.build/aspect-build/aspect-cli/5.0.3/docs/help/topics/plugins.html)
+This is very much a WIP effort. Do not use in your own pipelines (yet).
 
-## Instructions
+## Contribute
 
-Create a new repo with the green "Use this template" button above.
-Then in your repo...
+The best way I've found to iterate on this is to: 
 
-1. Find-and-replace `hello-world` with your plugin name.
-1. Find-and-replace `github.com/aspect-build/aspect-cli-plugin-template` with the name of your Go module. See <https://go.dev/doc/modules/developing>
-1. Start coding on your features!
-1. Delete everything above the SNIP line below, and replace it with info about your plugin.
-1. Want to share your plugin with other developers? Consider adding it to the plugin catalog, by sending a PR editing the `plugins.json` file located in the public [Aspect CLI plugins registry](https://github.com/aspect-build/aspect-cli/tree/main/docs/plugins).
+- Clone that repo locally and put it next to another repo that will use it as a plugin
+- Use the following snippet in `.aspect/cli/config.yaml`: 
 
----------- %<  SNIP %< ------------
+```
+plugins:
+  - name: buildkite
+    from: ../aspect-cli-plugin-buildkite/bazel-bin/plugin
+    log_level: debug
+    properties:
+      pretend: true
+```
 
-# My Plugin
+- Understanding [BEP](https://bazel.build/remote/bep) is not easy at first. Build whatever target you want to enhance with the flag `--build_event_json_file=bep.json` and inspect what's in there to get a better grasp at what events the code should react. 
 
-This is a plugin for the Aspect CLI.
+- A mocked version of `buildkite-agent` cli is provided under `//cmd/mockagent`. It does nothing else that dumping its args and stdin in `/tmp/_log_mock_agent.txt`. Set the property `buildkite_agent_path` to its compiled path to tell the plugin to use that binary instead of `buildkite-agent`.
 
 ## Demo
 

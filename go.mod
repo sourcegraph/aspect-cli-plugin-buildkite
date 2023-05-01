@@ -1,4 +1,4 @@
-module github.com/aspect-build/aspect-cli-plugin-template
+module github.com/sourcegraph/aspect-cli-plugin-buildkite
 
 go 1.19
 

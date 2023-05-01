@@ -3,14 +3,15 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 
 	goplugin "github.com/hashicorp/go-plugin"
-	"github.com/manifoldco/promptui"
+	"github.com/sourcegraph/aspect-cli-plugin-buildkite/bazel/outputfile"
+	"gopkg.in/yaml.v2"
 
 	"aspect.build/cli/bazel/buildeventstream"
-	"aspect.build/cli/bazel/command_line"
-	"aspect.build/cli/pkg/bazel"
 	"aspect.build/cli/pkg/ioutils"
 	"aspect.build/cli/pkg/plugin/sdk/v1alpha3/config"
 	aspectplugin "aspect.build/cli/pkg/plugin/sdk/v1alpha3/plugin"
@@ -18,80 +19,169 @@ import (
 
 // main starts up the plugin as a child process of the CLI and connects the gRPC communication.
 func main() {
-	goplugin.Serve(config.NewConfigFor(&HelloWorldPlugin{}))
+	goplugin.Serve(config.NewConfigFor(&BuildkitePlugin{}))
 }
 
-// HelloWorldPlugin declares the fields on an instance of the plugin.
-type HelloWorldPlugin struct {
+// BuildkitePlugin declares the fields on an instance of the plugin.
+type BuildkitePlugin struct {
 	// Base gives default implementations of the plugin methods, so implementing them below is optional.
 	// See the definition of aspectplugin.Base for more methods that can be implemented by the plugin.
 	aspectplugin.Base
-	// This plugin will store some state from the Build Events for use at the end of the build.
-	command_line.CommandLine
+
+	// agent is an interface wrapping access to the buildkite-agent binary.
+	// see https://buildkite.com/docs/agent/v3/cli-reference.
+	agent BuildkiteAgent
+	// outputClient handles reading from URI returned by the various event while abstracting away the different
+	// schemes so they can all be treated as local files.
+	outputClient *outputfile.Client
+
+	// failedTestResults is a list of failed tests whose logs will be uploaded as artifacts.
+	failedTestResults []*buildeventstream.TestResult
+	// failedActions is a list of actions that did not succeed, whose output will be used to annotate
+	// the build for more clarity.
+	failedActions []*failedAction
 }
 
-// CustomCommands contributes a new 'hello-world' command alongside the built-in ones like 'build' and 'test'.
-func (plugin *HelloWorldPlugin) CustomCommands() ([]*aspectplugin.Command, error) {
-	return []*aspectplugin.Command{
-		aspectplugin.NewCommand(
-			"hello-world",
-			"Print 'Hello World!' to the command line.",
-			"Print 'Hello World!' to the command line. Echo any given argument. Then run a 'bazel help'",
-			func(ctx context.Context, args []string, bzl bazel.Bazel) error {
-				fmt.Println("Hello World!")
-				fmt.Print("Arguments passed to command: ")
-				fmt.Println(args)
-				fmt.Println("Going to run: 'bazel help'")
-
-				bzl.RunCommand(ioutils.DefaultStreams, "help")
-
-				return nil
-			},
-		),
-	}, nil
+type pluginProperties struct {
+	// BuildkiteAgentPath stores the path of the buildkite-agent binary,
+	// see to https://buildkite.com/docs/agent/v3/cli-artifact.
+	// Defaults to "" (plugin will assume that buildkite-agent is in the $PATH).
+	BuildkiteAgentPath string `yaml:"buildkite_agent_path"`
+	// Pretend, if true, makes the plugin output the builkdite-agent commands instead
+	// of executing them, useful for local development.
+	Pretend bool `yaml:"pretend"`
 }
+
+// failedAction is small struct to hold the results from a failed action.
+type failedAction struct {
+	label     string
+	stderrURI string
+	stdoutURI string
+}
+
+// inBuildkite returns true if we detect that we're running inside a Buildkite agent.
+func (p *BuildkitePlugin) inBuildkite() bool {
+	return os.Getenv("BUILDKITE") == "true"
+}
+
+func (p *BuildkitePlugin) Setup(config *aspectplugin.SetupConfig) error {
+	// Parse plugin configuration properties
+	var props pluginProperties
+	if err := yaml.Unmarshal(config.Properties, &props); err != nil {
+		return fmt.Errorf("failed to setup: failed to parse properties: %w", err)
+	}
+	// Prepare buildkiteagent that we use to interact with Buildkite
+	if !props.Pretend {
+		p.agent = NewBuildkiteAgent(props.BuildkiteAgentPath)
+	} else {
+		p.agent = NewMockBuildkiteAgent(props.BuildkiteAgentPath)
+	}
+
+	// Create a client to read URIs, as they can be files or bytestream if a remote-cache is enabled.
+	p.outputClient = outputfile.NewClient()
+
+	return nil
+}
+
 // BEPEventCallback subscribes to all Build Events, and lets our logic react to ones we care about.
-func (plugin *HelloWorldPlugin) BEPEventCallback(event *buildeventstream.BuildEvent) error {
+func (p *BuildkitePlugin) BEPEventCallback(event *buildeventstream.BuildEvent) error {
+	if !p.inBuildkite() {
+		return nil
+	}
+
 	switch event.Payload.(type) {
-		case *buildeventstream.BuildEvent_StructuredCommandLine:
-			commandLine := *event.GetStructuredCommandLine()
-			if commandLine.CommandLineLabel == "canonical" {
-				plugin.CommandLine = commandLine
-			}
-	}
-	return nil
-}
-
-// PostBuildHook will be called at the end of an `aspect build` execution, after Bazel completes.
-func (plugin *HelloWorldPlugin) PostBuildHook(
-	isInteractiveMode bool,
-	promptRunner ioutils.PromptRunner,
-) error {
-	// We condition prompting on whether there's an interactive user to engage with.
-	if isInteractiveMode {
-		// The manifoldco/promptui library creates many styles of interactive prompts.
-		// Check out the examples: https://github.com/manifoldco/promptui/tree/master/_examples
-		prompt := promptui.Prompt{
-			Label:     "Thanks for trying the hello-world plugin! Would you like to see the command that was run",
-			IsConfirm: true,
+	case *buildeventstream.BuildEvent_TestResult:
+		testResult := event.GetTestResult()
+		if testResult.Status == buildeventstream.TestStatus_FAILED {
+			p.failedTestResults = append(p.failedTestResults, testResult)
 		}
-		// Since the prompt is a boolean, any non-nil error should represent a NO.
-		if _, err := promptRunner.Run(prompt); err == nil {
-			plugin.printTargetPattern()
+	case *buildeventstream.BuildEvent_Action:
+		action := event.GetAction()
+		if !action.GetSuccess() {
+			p.failedActions = append(p.failedActions, &failedAction{
+				label:     event.GetId().GetActionCompleted().GetLabel(),
+				stderrURI: action.GetStderr().GetUri(),
+				stdoutURI: action.GetStdout().GetUri(),
+			})
 		}
 	}
 	return nil
 }
 
-// printTargetPattern is just representative of some logic a plugin might want to perform on the data collected.
-func (plugin *HelloWorldPlugin) printTargetPattern() {
-	for _, section := range plugin.CommandLine.Sections {
-		fmt.Fprintf(os.Stdout, "%s\n", section.SectionLabel)
-		if section.SectionLabel == "residual" {
-			switch f := section.SectionType.(type) {
-			case *command_line.CommandLineSection_ChunkList:
-				fmt.Fprintf(os.Stdout, "target pattern was %s\n", f.ChunkList.Chunk[0])
+func (p *BuildkitePlugin) PostTestHook(interactive bool, pr ioutils.PromptRunner) error {
+	return p.hook(interactive, pr)
+}
+
+func (p *BuildkitePlugin) PostBuildHook(interactive bool, pr ioutils.PromptRunner) error {
+	return p.hook(interactive, pr)
+}
+
+func (p *BuildkitePlugin) PostRunHook(interactive bool, pr ioutils.PromptRunner) error {
+	return p.hook(interactive, pr)
+}
+
+func (p *BuildkitePlugin) hook(_ bool, pr ioutils.PromptRunner) error {
+	if !p.inBuildkite() {
+		return nil
+	}
+	ll, _ := os.Create("__log.txt")
+	defer ll.Close()
+
+	ctx := context.Background()
+	for _, tr := range p.failedTestResults {
+		for _, f := range tr.GetTestActionOutput() {
+			if f.GetName() == "test.log" {
+				path, err := p.outputClient.GetFilePath(ctx, f.GetUri(), f.GetName())
+				if err != nil {
+					return err
+				}
+				if err := p.agent.UploadArtifacts(ctx, path); err != nil {
+					return err
+				}
 			}
 		}
 	}
+
+	for _, fa := range p.failedActions {
+		b, err := renderFailedActionMarkdown(ctx, p.outputClient, fa)
+		if err != nil {
+			return err
+		}
+		if err := p.agent.Annotate(ctx, "error", fa.label, b); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func renderFailedActionMarkdown(ctx context.Context, client *outputfile.Client, fa *failedAction) ([]byte, error) {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("## Action failed: `%s`\n", fa.label))
+	if fa.stdoutURI != "" {
+		out, err := client.Open(ctx, fa.stdoutURI)
+		if err != nil {
+			return nil, err
+		}
+		defer out.Close()
+		sb.WriteString("_stdout_:\n")
+		sb.WriteString("```term")
+		if _, err := io.Copy(&sb, out); err != nil {
+			return nil, err
+		}
+		sb.WriteString("\n```\n")
+	}
+	if fa.stderrURI != "" {
+		out, err := client.Open(ctx, fa.stderrURI)
+		if err != nil {
+			return nil, err
+		}
+		defer out.Close()
+		sb.WriteString("_stderr_:\n")
+		sb.WriteString("```term\n")
+		if _, err := io.Copy(&sb, out); err != nil {
+			return nil, err
+		}
+		sb.WriteString("\n```\n")
+	}
+	return []byte(sb.String()), nil
 }

@@ -1,0 +1,28 @@
+load("@rules_proto//proto:defs.bzl", "proto_library")
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
+load("@io_bazel_rules_go//proto:def.bzl", "go_proto_library")
+
+proto_library(
+    name = "bytestream_proto",
+    srcs = ["bytestream.proto"],
+    visibility = ["//visibility:public"],
+    deps = ["@go_googleapis//google/api:annotations_proto"],
+)
+
+go_proto_library(
+    name = "bytestream_go_proto",
+    compilers = ["@io_bazel_rules_go//proto:go_grpc"],
+    importpath = "google.golang.org/genproto/googleapis/bytestream",
+    proto = ":bytestream_proto",
+    visibility = ["//visibility:public"],
+    deps = ["@go_googleapis//google/api:annotations_go_proto"],
+)
+
+go_library(
+    name = "bytestream",
+    srcs = ["client.go"],
+    embed = [":bytestream_go_proto"],  # keep
+    importpath = "github.com/sourcegraph/aspect-cli-plugin-buildkite/bazel/bytestream",
+    visibility = ["//visibility:public"],
+    deps = ["@org_golang_google_grpc//:go_default_library"],
+)
