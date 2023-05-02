@@ -28,16 +28,22 @@ func (a *buildkiteAgent) UploadArtifacts(ctx context.Context, glob string) error
 }
 
 func (a *buildkiteAgent) Annotate(ctx context.Context, style string, aCtx string, m []byte) error {
-	cmd := exec.CommandContext(ctx, a.path, fmt.Sprintf("annotate --style %s --context %s", style, aCtx))
+	cmd := exec.CommandContext(ctx, a.path, fmt.Sprintf("annotate --style %s --context %s --append", style, aCtx))
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return nil
+		return err
 	}
 	go func() {
 		defer stdin.Close()
 		_, _ = stdin.Write(m)
 	}()
-	return cmd.Run()
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Println("builkite-agent output")
+		fmt.Println(string(out))
+		fmt.Println("---------------------")
+	}
+	return err
 }
 
 type mockBuildkiteAgent struct {
