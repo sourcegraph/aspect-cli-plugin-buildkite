@@ -36,7 +36,7 @@ type BuildkitePlugin struct {
 	outputClient *outputfile.Client
 
 	// failedTestResults is a list of failed tests whose logs will be uploaded as artifacts.
-	failedTestResults []*buildeventstream.TestResult
+	failedTestResults []*failedTest
 	// failedActions is a list of actions that did not succeed, whose output will be used to annotate
 	// the build for more clarity.
 	failedActions []*failedAction
@@ -57,6 +57,11 @@ type failedAction struct {
 	label     string
 	stderrURI string
 	stdoutURI string
+}
+
+type failedTest struct {
+	result *buildeventstream.TestResult
+	label  string
 }
 
 // inBuildkite returns true if we detect that we're running inside a Buildkite agent.
@@ -92,8 +97,9 @@ func (p *BuildkitePlugin) BEPEventCallback(event *buildeventstream.BuildEvent) e
 	switch event.Payload.(type) {
 	case *buildeventstream.BuildEvent_TestResult:
 		testResult := event.GetTestResult()
+		label := event.Id.GetTestResult().GetLabel()
 		if testResult.Status == buildeventstream.TestStatus_FAILED {
-			p.failedTestResults = append(p.failedTestResults, testResult)
+			p.failedTestResults = append(p.failedTestResults, &failedTest{result: testResult, label: label})
 		}
 	case *buildeventstream.BuildEvent_Action:
 		action := event.GetAction()
@@ -128,8 +134,8 @@ func (p *BuildkitePlugin) hook(_ bool, pr ioutils.PromptRunner) error {
 	defer ll.Close()
 
 	ctx := context.Background()
-	for _, tr := range p.failedTestResults {
-		for _, f := range tr.GetTestActionOutput() {
+	for _, result := range p.failedTestResults {
+		for _, f := range result.result.GetTestActionOutput() {
 			if f.GetName() == "test.log" {
 				path, err := p.outputClient.GetFilePath(ctx, f.GetUri(), f.GetName())
 				if err != nil {
@@ -140,48 +146,56 @@ func (p *BuildkitePlugin) hook(_ bool, pr ioutils.PromptRunner) error {
 				}
 			}
 		}
+		m := renderFailedTestMarkdown(ctx, result)
+		if err := p.agent.Annotate(ctx, "error", "failed_test", []byte(m)); err != nil {
+			return err
+		}
 	}
 
-	for _, fa := range p.failedActions {
-		b, err := renderFailedActionMarkdown(ctx, p.outputClient, fa)
+	for _, action := range p.failedActions {
+		m, err := renderFailedActionMarkdown(ctx, p.outputClient, action)
 		if err != nil {
 			return err
 		}
-		if err := p.agent.Annotate(ctx, "error", fa.label, b); err != nil {
+		if err := p.agent.Annotate(ctx, "error", "failed_actions", []byte(m)); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func renderFailedActionMarkdown(ctx context.Context, client *outputfile.Client, fa *failedAction) ([]byte, error) {
+func renderFailedTestMarkdown(ctx context.Context, ft *failedTest) string {
+	return fmt.Sprintf("- **Failed test** `%s`\n", ft.label)
+}
+
+func renderFailedActionMarkdown(ctx context.Context, client *outputfile.Client, fa *failedAction) (string, error) {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("**Action failed: `%s`**\n", fa.label))
 	if fa.stdoutURI != "" {
 		out, err := client.Open(ctx, fa.stdoutURI)
 		if err != nil {
-			return nil, err
+			return "", err
 		}
 		defer out.Close()
 		sb.WriteString("_stdout_:\n")
 		sb.WriteString("```term")
 		if _, err := io.Copy(&sb, out); err != nil {
-			return nil, err
+			return "", err
 		}
 		sb.WriteString("\n```\n")
 	}
 	if fa.stderrURI != "" {
 		out, err := client.Open(ctx, fa.stderrURI)
 		if err != nil {
-			return nil, err
+			return "", err
 		}
 		defer out.Close()
 		sb.WriteString("_stderr_:\n")
 		sb.WriteString("```term\n")
 		if _, err := io.Copy(&sb, out); err != nil {
-			return nil, err
+			return "", err
 		}
 		sb.WriteString("\n```\n")
 	}
-	return []byte(sb.String()), nil
+	return sb.String(), nil
 }
