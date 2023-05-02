@@ -156,7 +156,7 @@ func (p *BuildkitePlugin) hook(_ bool, pr ioutils.PromptRunner) error {
 
 func renderFailedActionMarkdown(ctx context.Context, client *outputfile.Client, fa *failedAction) ([]byte, error) {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("## Action failed: `%s`\n", fa.label))
+	sb.WriteString(fmt.Sprintf("**Action failed: `%s`**\n", fa.label))
 	if fa.stdoutURI != "" {
 		out, err := client.Open(ctx, fa.stdoutURI)
 		if err != nil {
