@@ -43,6 +43,10 @@ type BuildkitePlugin struct {
 
 	// analyticsResults collects test results that will be sent to Buildkite Analytics.
 	analyticsResults []TestResult
+
+	// BuildkiteAnalyticsTokenName is the name of the env var we should be reading
+	// the token from or defaults to read it from "$BUILDKITE_ANALYTICS_TOKEN".
+	buildkiteAnalyticsToken string
 }
 
 type pluginProperties struct {
@@ -50,9 +54,14 @@ type pluginProperties struct {
 	// see to https://buildkite.com/docs/agent/v3/cli-artifact.
 	// Defaults to "" (plugin will assume that buildkite-agent is in the $PATH).
 	BuildkiteAgentPath string `yaml:"buildkite_agent_path"`
+
 	// Pretend, if true, makes the plugin output the builkdite-agent commands instead
 	// of executing them, useful for local development.
 	Pretend bool `yaml:"pretend"`
+
+	// BuildkiteAnalyticsTokenName is the name of the env var we should be reading
+	// the token from or defaults to "BUILDKITE_ANALYTICS_TOKEN".
+	BuildkiteAnalyticsTokenName string `yaml:"buildkite_analytics_env_name"`
 }
 
 // failedAction is small struct to hold the results from a failed action.
@@ -78,6 +87,14 @@ func (p *BuildkitePlugin) Setup(config *aspectplugin.SetupConfig) error {
 	if err := yaml.Unmarshal(config.Properties, &props); err != nil {
 		return fmt.Errorf("failed to setup: failed to parse properties: %w", err)
 	}
+
+	// Read the BuildkiteAnalytics token from the env.
+	tokvar := props.BuildkiteAnalyticsTokenName
+	if tokvar == "" {
+		tokvar = "BUILDKITE_ANALYTICS_TOKEN"
+	}
+	p.buildkiteAnalyticsToken = os.Getenv(tokvar)
+
 	// Prepare buildkiteagent that we use to interact with Buildkite
 	if !props.Pretend {
 		p.agent = NewBuildkiteAgent(props.BuildkiteAgentPath)

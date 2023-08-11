@@ -37,8 +37,8 @@ func NewTestResult(target string, start int64, duration float64, result string) 
 	}
 }
 
-func PostResults(ctx context.Context, results []TestResult) error {
-	if len(results) == 0 {
+func PostResults(ctx context.Context, token string, results []TestResult) error {
+	if len(results) == 0 || token == "" {
 		return nil
 	}
 
@@ -76,7 +76,7 @@ func PostResults(ctx context.Context, results []TestResult) error {
 		return err
 	}
 
-	req.Header.Set("Authorization", fmt.Sprintf("Token token=\"%s\"", os.Getenv("BUILDKITE_ANALYTICS_TOKEN")))
+	req.Header.Set("Authorization", fmt.Sprintf("Token token=\"%s\"", token))
 	req.Header.Set("Content-Type", formWriter.FormDataContentType())
 
 	resp, err := http.DefaultClient.Do(req)
