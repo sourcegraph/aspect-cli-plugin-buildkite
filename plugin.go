@@ -132,12 +132,12 @@ func (p *BuildkitePlugin) BEPEventCallback(event *buildeventstream.BuildEvent) e
 }
 
 func (p *BuildkitePlugin) PostTestHook(interactive bool, pr ioutils.PromptRunner) error {
-	// if err := PostResults(context.Background(), p.analyticsResults); err != nil {
-	// 	return err
-	// }
-	if err := SaveTestResults(p.analyticsResults); err != nil {
+	if err := PostResults(context.Background(), p.analyticsResults); err != nil {
 		return err
 	}
+	// if err := SaveTestResults(p.analyticsResults); err != nil {
+	// 	return err
+	// }
 	return p.hook(interactive, pr)
 }
 
@@ -150,7 +150,6 @@ func (p *BuildkitePlugin) PostRunHook(interactive bool, pr ioutils.PromptRunner)
 }
 
 func (p *BuildkitePlugin) hook(_ bool, pr ioutils.PromptRunner) error {
-	return nil
 	if !p.inBuildkite() {
 		return nil
 	}
