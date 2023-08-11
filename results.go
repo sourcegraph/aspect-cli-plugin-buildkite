@@ -38,6 +38,10 @@ func NewTestResult(target string, start int64, duration float64, result string) 
 }
 
 func PostResults(ctx context.Context, results []TestResult) error {
+	if len(results) == 0 {
+		return nil
+	}
+
 	var buf bytes.Buffer
 	formWriter := multipart.NewWriter(&buf)
 
