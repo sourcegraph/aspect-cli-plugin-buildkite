@@ -67,7 +67,7 @@ func PostResults(ctx context.Context, results []TestResult) error {
 		return err
 	}
 
-	req, err := http.NewRequest("POST", "http://localhost:6666", &buf) // "https://analytics-api.buildkite.com/v1/uploads", &buf)
+	req, err := http.NewRequest("POST", "https://analytics-api.buildkite.com/v1/uploads", &buf)
 	if err != nil {
 		return err
 	}
