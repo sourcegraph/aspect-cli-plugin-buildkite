@@ -40,6 +40,8 @@ type BuildkitePlugin struct {
 	// failedActions is a list of actions that did not succeed, whose output will be used to annotate
 	// the build for more clarity.
 	failedActions []*failedAction
+
+	analyticsResults []TestResult
 }
 
 type pluginProperties struct {
@@ -98,9 +100,20 @@ func (p *BuildkitePlugin) BEPEventCallback(event *buildeventstream.BuildEvent) e
 	case *buildeventstream.BuildEvent_TestResult:
 		testResult := event.GetTestResult()
 		label := event.Id.GetTestResult().GetLabel()
+		var result = "passed"
 		if testResult.Status == buildeventstream.TestStatus_FAILED {
 			p.failedTestResults = append(p.failedTestResults, &failedTest{result: testResult, label: label})
+			result = "failed"
 		}
+
+		tr := NewTestResult(
+			label,
+			testResult.TestAttemptStartMillisEpoch,
+			testResult.TestAttemptDurationMillis,
+			result,
+		)
+		p.analyticsResults = append(p.analyticsResults, tr)
+
 	case *buildeventstream.BuildEvent_Action:
 		action := event.GetAction()
 		if !action.GetSuccess() {
@@ -115,6 +128,9 @@ func (p *BuildkitePlugin) BEPEventCallback(event *buildeventstream.BuildEvent) e
 }
 
 func (p *BuildkitePlugin) PostTestHook(interactive bool, pr ioutils.PromptRunner) error {
+	if err := PostResults(context.Background(), p.analyticsResults); err != nil {
+		return err
+	}
 	return p.hook(interactive, pr)
 }
 
@@ -127,6 +143,7 @@ func (p *BuildkitePlugin) PostRunHook(interactive bool, pr ioutils.PromptRunner)
 }
 
 func (p *BuildkitePlugin) hook(_ bool, pr ioutils.PromptRunner) error {
+	return nil
 	if !p.inBuildkite() {
 		return nil
 	}
