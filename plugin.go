@@ -41,6 +41,7 @@ type BuildkitePlugin struct {
 	// the build for more clarity.
 	failedActions []*failedAction
 
+	// analyticsResults collects test results that will be sent to Buildkite Analytics.
 	analyticsResults []TestResult
 }
 
@@ -106,13 +107,16 @@ func (p *BuildkitePlugin) BEPEventCallback(event *buildeventstream.BuildEvent) e
 			result = "failed"
 		}
 
-		tr := NewTestResult(
-			label,
-			testResult.TestAttemptStartMillisEpoch,
-			testResult.TestAttemptDurationMillis,
-			result,
-		)
-		p.analyticsResults = append(p.analyticsResults, tr)
+		// If it's a cache miss, we're really executing the test, so we record it.
+		if !testResult.GetCachedLocally() && !testResult.GetExecutionInfo().GetCachedRemotely() {
+			tr := NewTestResult(
+				label,
+				testResult.TestAttemptStartMillisEpoch,
+				float64(testResult.TestAttemptDurationMillis)/1000,
+				result,
+			)
+			p.analyticsResults = append(p.analyticsResults, tr)
+		}
 
 	case *buildeventstream.BuildEvent_Action:
 		action := event.GetAction()
@@ -128,7 +132,10 @@ func (p *BuildkitePlugin) BEPEventCallback(event *buildeventstream.BuildEvent) e
 }
 
 func (p *BuildkitePlugin) PostTestHook(interactive bool, pr ioutils.PromptRunner) error {
-	if err := PostResults(context.Background(), p.analyticsResults); err != nil {
+	// if err := PostResults(context.Background(), p.analyticsResults); err != nil {
+	// 	return err
+	// }
+	if err := SaveTestResults(p.analyticsResults); err != nil {
 		return err
 	}
 	return p.hook(interactive, pr)
