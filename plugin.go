@@ -129,6 +129,7 @@ func (p *BuildkitePlugin) BEPEventCallback(event *buildeventstream.BuildEvent) e
 			tr := NewTestResult(
 				label,
 				testResult.TestAttemptStartMillisEpoch,
+				testResult.TestAttemptStartMillisEpoch+testResult.TestAttemptDurationMillis,
 				float64(testResult.TestAttemptDurationMillis)/1000,
 				result,
 			)

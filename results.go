@@ -15,6 +15,7 @@ import (
 
 type History struct {
 	StartAt       int64   `json:"start_at"`
+	EndAt         int64   `json:"end_at"`
 	DurationInSec float64 `json:"duration"`
 }
 
@@ -25,13 +26,14 @@ type TestResult struct {
 	Result  string  `json:"result"`
 }
 
-func NewTestResult(target string, start int64, duration float64, result string) TestResult {
+func NewTestResult(target string, start int64, end int64, duration float64, result string) TestResult {
 	return TestResult{
 		ID:     uuid.NewString(),
 		Name:   target,
 		Result: result,
 		History: History{
 			StartAt:       start,
+			EndAt:         end,
 			DurationInSec: duration,
 		},
 	}
