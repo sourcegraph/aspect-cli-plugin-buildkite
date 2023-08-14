@@ -60,7 +60,7 @@ type pluginProperties struct {
 	Pretend bool `yaml:"pretend"`
 
 	// BuildkiteAnalyticsTokenName is the name of the env var we should be reading
-	// the token from or defaults to "BUILDKITE_ANALYTICS_TOKEN".
+	// the token from. The default env var name is "BUILDKITE_ANALYTICS_TOKEN".
 	BuildkiteAnalyticsTokenName string `yaml:"buildkite_analytics_env_name"`
 }
 
