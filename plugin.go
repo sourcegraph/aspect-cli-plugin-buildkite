@@ -132,7 +132,7 @@ func (tr *testResultInfo) AnalyticsPayload(testLogPath string) (*AnalyticsTestPa
 		}
 
 		// Store the logs in the payload.
-		failureExpanded = append(failureExpanded, map[string][]string{"test_log": lines})
+		failureExpanded = append(failureExpanded, map[string][]string{"expanded": lines})
 
 		// Record the failure reason.
 		reason := tr.FailureReason()

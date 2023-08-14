@@ -31,6 +31,35 @@ func PostResults(ctx context.Context, token string, results []*AnalyticsTestPayl
 		return nil
 	}
 
+	chunks := [][]*AnalyticsTestPayload{}
+	chunkSize := 5000 // Buildkite Test Analytics API implies that it should get at most 5k records at once.
+	chunkCount := len(results) / chunkSize
+
+	if len(results)%chunkSize > 0 {
+		// If we have a remainder, let's account for it.
+		chunkCount++
+	}
+
+	for i := 0; i < chunkCount; i++ {
+		begin := i * chunkSize
+		end := (i + 1) * chunkSize
+
+		if len(results[begin:]) > chunkSize {
+			chunks = append(chunks, results[begin:end])
+		} else {
+			chunks = append(chunks, results[begin:])
+		}
+	}
+
+	for _, chunk := range chunks {
+		if err := postResults(ctx, token, chunk); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func postResults(ctx context.Context, token string, results []*AnalyticsTestPayload) error {
 	var buf bytes.Buffer
 	formWriter := multipart.NewWriter(&buf)
 
