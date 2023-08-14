@@ -107,7 +107,7 @@ func (tr *testResultInfo) FailureReason() string {
 
 func (tr *testResultInfo) AnalyticsPayload(testLogPath string) (*AnalyticsTestPayload, error) {
 	result := "passed"
-	failureExpanded := map[string][]string{}
+	failureExpanded := []map[string][]string{}
 	var failureReason *string
 
 	if tr.Failed() {
@@ -132,7 +132,7 @@ func (tr *testResultInfo) AnalyticsPayload(testLogPath string) (*AnalyticsTestPa
 		}
 
 		// Store the logs in the payload.
-		failureExpanded["test_log"] = lines
+		failureExpanded = append(failureExpanded, map[string][]string{"test_log": lines})
 
 		// Record the failure reason.
 		reason := tr.FailureReason()

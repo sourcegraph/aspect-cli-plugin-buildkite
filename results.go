@@ -18,12 +18,12 @@ type History struct {
 }
 
 type AnalyticsTestPayload struct {
-	ID              string              `json:"id"`
-	Name            string              `json:"name"`
-	History         History             `json:"history"`
-	Result          string              `json:"result"`
-	FailureReason   *string             `json:"failure_reason,omitempty"`
-	FailureExpanded map[string][]string `json:"failure_expanded,omitempty"`
+	ID              string                `json:"id"`
+	Name            string                `json:"name"`
+	History         History               `json:"history"`
+	Result          string                `json:"result"`
+	FailureReason   *string               `json:"failure_reason,omitempty"`
+	FailureExpanded []map[string][]string `json:"failure_expanded,omitempty"`
 }
 
 func PostResults(ctx context.Context, token string, results []*AnalyticsTestPayload) error {
