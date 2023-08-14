@@ -9,8 +9,6 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
-
-	"github.com/google/uuid"
 )
 
 type History struct {
@@ -24,21 +22,8 @@ type AnalyticsTestPayload struct {
 	Name            string              `json:"name"`
 	History         History             `json:"history"`
 	Result          string              `json:"result"`
-	FailureReson    string              `json:"failure_reason"`
-	FailureExpanded map[string][]string `json:"failure_expanded"`
-}
-
-func NewTestResult(target string, start int64, end int64, duration float64, result string) AnalyticsTestPayload {
-	return AnalyticsTestPayload{
-		ID:     uuid.NewString(),
-		Name:   target,
-		Result: result,
-		History: History{
-			StartAt:       start,
-			EndAt:         end,
-			DurationInSec: duration,
-		},
-	}
+	FailureReason   *string             `json:"failure_reason,omitempty"`
+	FailureExpanded map[string][]string `json:"failure_expanded,omitempty"`
 }
 
 func PostResults(ctx context.Context, token string, results []*AnalyticsTestPayload) error {

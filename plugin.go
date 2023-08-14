@@ -108,6 +108,7 @@ func (tr *testResultInfo) FailureReason() string {
 func (tr *testResultInfo) AnalyticsPayload(testLogPath string) (*AnalyticsTestPayload, error) {
 	result := "passed"
 	failureExpanded := map[string][]string{}
+	var failureReason *string
 
 	if tr.Failed() {
 		// record it for our payload
@@ -130,15 +131,19 @@ func (tr *testResultInfo) AnalyticsPayload(testLogPath string) (*AnalyticsTestPa
 			return nil, err
 		}
 
-		// store the logs in the payload
+		// Store the logs in the payload.
 		failureExpanded["test_log"] = lines
+
+		// Record the failure reason.
+		reason := tr.FailureReason()
+		failureReason = &reason
 	}
 
 	return &AnalyticsTestPayload{
 		ID:              uuid.NewString(),
 		Name:            tr.label,
 		Result:          result,
-		FailureReson:    tr.FailureReason(),
+		FailureReason:   failureReason,
 		FailureExpanded: failureExpanded,
 		History: History{
 			StartAt:       tr.result.TestAttemptStartMillisEpoch,
@@ -247,7 +252,7 @@ func (p *BuildkitePlugin) postTestAnalytics(ctx context.Context) error {
 
 	if p.buildkiteAnalyticsToken != "" {
 		// return SaveTestResults(payloads)
-		return PostResults(context.Background(), p.buildkiteAnalyticsToken, payloads)
+		return PostResults(ctx, p.buildkiteAnalyticsToken, payloads)
 	}
 	return nil
 }
