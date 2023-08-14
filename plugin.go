@@ -185,6 +185,67 @@ func (p *BuildkitePlugin) Setup(config *aspectplugin.SetupConfig) error {
 	return nil
 }
 
+// BEPEventCallback subscribes to all Build Events, and lets our logic react to ones we care about.
+func (p *BuildkitePlugin) BEPEventCallback(event *buildeventstream.BuildEvent) error {
+	if !p.inBuildkite() {
+		return nil
+	}
+
+	switch event.Payload.(type) {
+	case *buildeventstream.BuildEvent_TestResult:
+		testResult := event.GetTestResult()
+		label := event.Id.GetTestResult().GetLabel()
+
+		tr := testResultInfo{
+			result: testResult,
+			label:  label,
+			cached: testResult.GetCachedLocally() || testResult.GetExecutionInfo().GetCachedRemotely(),
+		}
+		p.testResultInfos = append(p.testResultInfos, &tr)
+
+	case *buildeventstream.BuildEvent_Action:
+		action := event.GetAction()
+		if !action.GetSuccess() {
+			p.failedActions = append(p.failedActions, &failedAction{
+				label:     event.GetId().GetActionCompleted().GetLabel(),
+				stderrURI: action.GetStderr().GetUri(),
+				stdoutURI: action.GetStdout().GetUri(),
+			})
+		}
+	}
+	return nil
+}
+
+func (p *BuildkitePlugin) PostTestHook(interactive bool, pr ioutils.PromptRunner) error {
+	return p.hook(interactive, pr)
+}
+
+func (p *BuildkitePlugin) PostBuildHook(interactive bool, pr ioutils.PromptRunner) error {
+	return p.hook(interactive, pr)
+}
+
+func (p *BuildkitePlugin) PostRunHook(interactive bool, pr ioutils.PromptRunner) error {
+	return p.hook(interactive, pr)
+}
+
+func (p *BuildkitePlugin) hook(_ bool, pr ioutils.PromptRunner) error {
+	if !p.inBuildkite() {
+		return nil
+	}
+
+	ctx := context.Background()
+	if err := p.annotateFailedTests(ctx); err != nil {
+		return err
+	}
+	if err := p.annotateFailedActions(ctx); err != nil {
+		return err
+	}
+	if err := p.postTestAnalytics(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (p *BuildkitePlugin) annotateFailedTests(ctx context.Context) error {
 	for _, result := range p.testResultInfos {
 		var testLogPath string
@@ -253,67 +314,6 @@ func (p *BuildkitePlugin) postTestAnalytics(ctx context.Context) error {
 	if p.buildkiteAnalyticsToken != "" {
 		// return SaveTestResults(payloads)
 		return PostResults(ctx, p.buildkiteAnalyticsToken, payloads)
-	}
-	return nil
-}
-
-// BEPEventCallback subscribes to all Build Events, and lets our logic react to ones we care about.
-func (p *BuildkitePlugin) BEPEventCallback(event *buildeventstream.BuildEvent) error {
-	if !p.inBuildkite() {
-		return nil
-	}
-
-	switch event.Payload.(type) {
-	case *buildeventstream.BuildEvent_TestResult:
-		testResult := event.GetTestResult()
-		label := event.Id.GetTestResult().GetLabel()
-
-		tr := testResultInfo{
-			result: testResult,
-			label:  label,
-			cached: testResult.GetCachedLocally() || testResult.GetExecutionInfo().GetCachedRemotely(),
-		}
-		p.testResultInfos = append(p.testResultInfos, &tr)
-
-	case *buildeventstream.BuildEvent_Action:
-		action := event.GetAction()
-		if !action.GetSuccess() {
-			p.failedActions = append(p.failedActions, &failedAction{
-				label:     event.GetId().GetActionCompleted().GetLabel(),
-				stderrURI: action.GetStderr().GetUri(),
-				stdoutURI: action.GetStdout().GetUri(),
-			})
-		}
-	}
-	return nil
-}
-
-func (p *BuildkitePlugin) PostTestHook(interactive bool, pr ioutils.PromptRunner) error {
-	return p.hook(interactive, pr)
-}
-
-func (p *BuildkitePlugin) PostBuildHook(interactive bool, pr ioutils.PromptRunner) error {
-	return p.hook(interactive, pr)
-}
-
-func (p *BuildkitePlugin) PostRunHook(interactive bool, pr ioutils.PromptRunner) error {
-	return p.hook(interactive, pr)
-}
-
-func (p *BuildkitePlugin) hook(_ bool, pr ioutils.PromptRunner) error {
-	if !p.inBuildkite() {
-		return nil
-	}
-
-	ctx := context.Background()
-	if err := p.annotateFailedTests(ctx); err != nil {
-		return err
-	}
-	if err := p.annotateFailedActions(ctx); err != nil {
-		return err
-	}
-	if err := p.postTestAnalytics(ctx); err != nil {
-		return err
 	}
 	return nil
 }
