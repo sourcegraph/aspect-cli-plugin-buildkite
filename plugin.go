@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 
+	"github.com/google/uuid"
 	goplugin "github.com/hashicorp/go-plugin"
 	"github.com/sourcegraph/aspect-cli-plugin-buildkite/bazel/outputfile"
 	"gopkg.in/yaml.v2"
@@ -35,14 +37,12 @@ type BuildkitePlugin struct {
 	// schemes so they can all be treated as local files.
 	outputClient *outputfile.Client
 
-	// failedTestResults is a list of failed tests whose logs will be uploaded as artifacts.
-	failedTestResults []*failedTest
+	// testResultInfos is a list of failed tests whose logs will be uploaded as artifacts.
+	testResultInfos []*testResultInfo
+
 	// failedActions is a list of actions that did not succeed, whose output will be used to annotate
 	// the build for more clarity.
 	failedActions []*failedAction
-
-	// analyticsResults collects test results that will be sent to Buildkite Analytics.
-	analyticsResults []TestResult
 
 	// BuildkiteAnalyticsTokenName is the name of the env var we should be reading
 	// the token from or defaults to read it from "$BUILDKITE_ANALYTICS_TOKEN".
@@ -71,9 +71,81 @@ type failedAction struct {
 	stdoutURI string
 }
 
-type failedTest struct {
+type testResultInfo struct {
 	result *buildeventstream.TestResult
 	label  string
+	cached bool
+}
+
+func (tr *testResultInfo) Failed() bool {
+	status := tr.result.GetStatus()
+	return status == buildeventstream.TestStatus_FAILED ||
+		status == buildeventstream.TestStatus_REMOTE_FAILURE ||
+		status == buildeventstream.TestStatus_TIMEOUT
+}
+
+func (tr *testResultInfo) FailureReason() string {
+	switch tr.result.GetStatus() {
+	case buildeventstream.TestStatus_NO_STATUS:
+		return "no_status"
+	case buildeventstream.TestStatus_FAILED:
+		return "failed"
+	case buildeventstream.TestStatus_FLAKY:
+		return "flaky"
+	case buildeventstream.TestStatus_TIMEOUT:
+		return "timeout"
+	case buildeventstream.TestStatus_REMOTE_FAILURE:
+		return "remote_failure"
+	case buildeventstream.TestStatus_FAILED_TO_BUILD:
+		return "failed_to_build"
+	case buildeventstream.TestStatus_TOOL_HALTED_BEFORE_TESTING:
+		return "tool_halted_before_testing"
+	default:
+		return ""
+	}
+}
+
+func (tr *testResultInfo) AnalyticsPayload(testLogPath string) (*AnalyticsTestPayload, error) {
+	result := "passed"
+	failureExpanded := map[string][]string{}
+
+	if tr.Failed() {
+		// record it for our payload
+		result = "failed"
+
+		// extract the logs
+		f, err := os.Open(testLogPath)
+		defer f.Close()
+		if err != nil {
+			return nil, err
+		}
+
+		var lines []string
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			lines = append(lines, scanner.Text())
+		}
+
+		if err := scanner.Err(); err != nil {
+			return nil, err
+		}
+
+		// store the logs in the payload
+		failureExpanded["test_log"] = lines
+	}
+
+	return &AnalyticsTestPayload{
+		ID:              uuid.NewString(),
+		Name:            tr.label,
+		Result:          result,
+		FailureReson:    tr.FailureReason(),
+		FailureExpanded: failureExpanded,
+		History: History{
+			StartAt:       tr.result.TestAttemptStartMillisEpoch,
+			EndAt:         tr.result.TestAttemptStartMillisEpoch + tr.result.TestAttemptDurationMillis,
+			DurationInSec: float64(tr.result.TestAttemptDurationMillis) / 1000,
+		},
+	}, nil
 }
 
 // inBuildkite returns true if we detect that we're running inside a Buildkite agent.
@@ -108,6 +180,78 @@ func (p *BuildkitePlugin) Setup(config *aspectplugin.SetupConfig) error {
 	return nil
 }
 
+func (p *BuildkitePlugin) annotateFailedTests(ctx context.Context) error {
+	for _, result := range p.testResultInfos {
+		var testLogPath string
+
+		for _, f := range result.result.GetTestActionOutput() {
+			if f.GetName() == "test.log" {
+				path, err := p.outputClient.GetFilePath(ctx, f.GetUri(), f.GetName())
+				if err != nil {
+					return err
+				}
+				testLogPath = path
+			}
+		}
+
+		// If the test failed, annotate and upload the artifact.
+		if result.Failed() {
+			m := renderFailedTestMarkdown(ctx, result)
+			if err := p.agent.Annotate(ctx, "error", "failed_test", []byte(m)); err != nil {
+				return err
+			}
+			if testLogPath != "" {
+				if err := p.agent.UploadArtifacts(ctx, testLogPath); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (p *BuildkitePlugin) annotateFailedActions(ctx context.Context) error {
+	for _, action := range p.failedActions {
+		m, err := renderFailedActionMarkdown(ctx, p.outputClient, action)
+		if err != nil {
+			return err
+		}
+		if err := p.agent.Annotate(ctx, "error", "failed_actions", []byte(m)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *BuildkitePlugin) postTestAnalytics(ctx context.Context) error {
+	payloads := []*AnalyticsTestPayload{}
+	for _, result := range p.testResultInfos {
+		var testLogPath string
+
+		for _, f := range result.result.GetTestActionOutput() {
+			if f.GetName() == "test.log" {
+				path, err := p.outputClient.GetFilePath(ctx, f.GetUri(), f.GetName())
+				if err != nil {
+					return err
+				}
+				testLogPath = path
+			}
+		}
+
+		payload, err := result.AnalyticsPayload(testLogPath)
+		if err != nil {
+			return err
+		}
+		payloads = append(payloads, payload)
+	}
+
+	if p.buildkiteAnalyticsToken != "" {
+		// return SaveTestResults(payloads)
+		return PostResults(context.Background(), p.buildkiteAnalyticsToken, payloads)
+	}
+	return nil
+}
+
 // BEPEventCallback subscribes to all Build Events, and lets our logic react to ones we care about.
 func (p *BuildkitePlugin) BEPEventCallback(event *buildeventstream.BuildEvent) error {
 	if !p.inBuildkite() {
@@ -118,23 +262,13 @@ func (p *BuildkitePlugin) BEPEventCallback(event *buildeventstream.BuildEvent) e
 	case *buildeventstream.BuildEvent_TestResult:
 		testResult := event.GetTestResult()
 		label := event.Id.GetTestResult().GetLabel()
-		var result = "passed"
-		if testResult.Status == buildeventstream.TestStatus_FAILED {
-			p.failedTestResults = append(p.failedTestResults, &failedTest{result: testResult, label: label})
-			result = "failed"
-		}
 
-		// If it's a cache miss, we're really executing the test, so we record it.
-		if !testResult.GetCachedLocally() && !testResult.GetExecutionInfo().GetCachedRemotely() {
-			tr := NewTestResult(
-				label,
-				testResult.TestAttemptStartMillisEpoch,
-				testResult.TestAttemptStartMillisEpoch+testResult.TestAttemptDurationMillis,
-				float64(testResult.TestAttemptDurationMillis)/1000,
-				result,
-			)
-			p.analyticsResults = append(p.analyticsResults, tr)
+		tr := testResultInfo{
+			result: testResult,
+			label:  label,
+			cached: testResult.GetCachedLocally() || testResult.GetExecutionInfo().GetCachedRemotely(),
 		}
+		p.testResultInfos = append(p.testResultInfos, &tr)
 
 	case *buildeventstream.BuildEvent_Action:
 		action := event.GetAction()
@@ -150,12 +284,6 @@ func (p *BuildkitePlugin) BEPEventCallback(event *buildeventstream.BuildEvent) e
 }
 
 func (p *BuildkitePlugin) PostTestHook(interactive bool, pr ioutils.PromptRunner) error {
-	if err := PostResults(context.Background(), p.analyticsResults); err != nil {
-		return err
-	}
-	// if err := SaveTestResults(p.analyticsResults); err != nil {
-	// 	return err
-	// }
 	return p.hook(interactive, pr)
 }
 
@@ -171,41 +299,21 @@ func (p *BuildkitePlugin) hook(_ bool, pr ioutils.PromptRunner) error {
 	if !p.inBuildkite() {
 		return nil
 	}
-	ll, _ := os.Create("__log.txt")
-	defer ll.Close()
 
 	ctx := context.Background()
-	for _, result := range p.failedTestResults {
-		for _, f := range result.result.GetTestActionOutput() {
-			if f.GetName() == "test.log" {
-				path, err := p.outputClient.GetFilePath(ctx, f.GetUri(), f.GetName())
-				if err != nil {
-					return err
-				}
-				if err := p.agent.UploadArtifacts(ctx, path); err != nil {
-					return err
-				}
-			}
-		}
-		m := renderFailedTestMarkdown(ctx, result)
-		if err := p.agent.Annotate(ctx, "error", "failed_test", []byte(m)); err != nil {
-			return err
-		}
+	if err := p.annotateFailedTests(ctx); err != nil {
+		return err
 	}
-
-	for _, action := range p.failedActions {
-		m, err := renderFailedActionMarkdown(ctx, p.outputClient, action)
-		if err != nil {
-			return err
-		}
-		if err := p.agent.Annotate(ctx, "error", "failed_actions", []byte(m)); err != nil {
-			return err
-		}
+	if err := p.annotateFailedActions(ctx); err != nil {
+		return err
+	}
+	if err := p.postTestAnalytics(ctx); err != nil {
+		return err
 	}
 	return nil
 }
 
-func renderFailedTestMarkdown(ctx context.Context, ft *failedTest) string {
+func renderFailedTestMarkdown(ctx context.Context, ft *testResultInfo) string {
 	return fmt.Sprintf("- **Failed test** `%s`\n", ft.label)
 }
 

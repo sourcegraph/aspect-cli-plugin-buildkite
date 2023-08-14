@@ -19,15 +19,17 @@ type History struct {
 	DurationInSec float64 `json:"duration"`
 }
 
-type TestResult struct {
-	ID      string  `json:"id"`
-	Name    string  `json:"name"`
-	History History `json:"history"`
-	Result  string  `json:"result"`
+type AnalyticsTestPayload struct {
+	ID              string              `json:"id"`
+	Name            string              `json:"name"`
+	History         History             `json:"history"`
+	Result          string              `json:"result"`
+	FailureReson    string              `json:"failure_reason"`
+	FailureExpanded map[string][]string `json:"failure_expanded"`
 }
 
-func NewTestResult(target string, start int64, end int64, duration float64, result string) TestResult {
-	return TestResult{
+func NewTestResult(target string, start int64, end int64, duration float64, result string) AnalyticsTestPayload {
+	return AnalyticsTestPayload{
 		ID:     uuid.NewString(),
 		Name:   target,
 		Result: result,
@@ -39,7 +41,7 @@ func NewTestResult(target string, start int64, end int64, duration float64, resu
 	}
 }
 
-func PostResults(ctx context.Context, token string, results []TestResult) error {
+func PostResults(ctx context.Context, token string, results []*AnalyticsTestPayload) error {
 	if len(results) == 0 || token == "" {
 		return nil
 	}
@@ -94,7 +96,7 @@ func PostResults(ctx context.Context, token string, results []TestResult) error 
 	}
 }
 
-func SaveTestResults(res []TestResult) error {
+func SaveTestResults(res []*AnalyticsTestPayload) error {
 	f, err := os.Create("testresults.json")
 	if err != nil {
 		return err
