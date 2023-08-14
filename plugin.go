@@ -201,7 +201,10 @@ func (p *BuildkitePlugin) BEPEventCallback(event *buildeventstream.BuildEvent) e
 			label:  label,
 			cached: testResult.GetCachedLocally() || testResult.GetExecutionInfo().GetCachedRemotely(),
 		}
-		p.testResultInfos = append(p.testResultInfos, &tr)
+
+		if !tr.cached {
+			p.testResultInfos = append(p.testResultInfos, &tr)
+		}
 
 	case *buildeventstream.BuildEvent_Action:
 		action := event.GetAction()
