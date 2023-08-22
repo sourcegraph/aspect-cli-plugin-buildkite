@@ -51,6 +51,10 @@ type BuildkitePlugin struct {
 	// isPreamblePosted tells us if we have posted or not the preamble, as we don't have
 	// a final or first hook to run things before or after the completion of the entire build.
 	isPreamblePosted bool
+
+	// buildkiteJobID stores the current job ID, useful to distinguish annotations when multiple jobs
+	// involving Bazel are run in a build.
+	buildkiteJobID string
 }
 
 type pluginProperties struct {
@@ -176,6 +180,9 @@ func (p *BuildkitePlugin) Setup(config *aspectplugin.SetupConfig) error {
 	}
 	p.buildkiteAnalyticsToken = os.Getenv(tokvar)
 
+	// Read the Buildkite Job ID
+	p.buildkiteJobID = os.Getenv("BUILDKITE_JOB_ID")
+
 	// Prepare buildkiteagent that we use to interact with Buildkite
 	if !props.Pretend {
 		p.agent = NewBuildkiteAgent(props.BuildkiteAgentPath)
@@ -256,11 +263,15 @@ func (p *BuildkitePlugin) hook(_ bool, pr ioutils.PromptRunner) error {
 // testPreamble is the text posted before anything else in the error annotation at the top of the build
 // if there is a failed test detected the build. The final two line breaks are important, because they
 // allow the formatting to be readable when we're posting the list of failed test targets.
-var testPreamble = `:bulb: You can run the following failed test targets with 'bazel test [target]' locally on your
+var testPreamble = `#### Failures
+
+[Jump to job.](#%s)
+
+:bulb: You can run the following failed test targets with ` + "`" + `bazel test [target]` + "`" + ` locally on your
 machine to reproduce the issues and iterate faster than having to wait for the CI again.
 
-If a particular test target is too slow to build, you can also use 'sg ci bazel test [target]' to have the CI run that 
-only particular target.
+If a particular test target is too slow locally, you can also use ` + "`" + `sg ci bazel test [target]` + "`" + ` to have the CI run that 
+particular target only.
 
 
 `
@@ -268,7 +279,7 @@ only particular target.
 func (p *BuildkitePlugin) annotateFailedTests(ctx context.Context) error {
 	if len(p.testResultInfos) > 0 && !p.isPreamblePosted {
 		p.isPreamblePosted = true
-		if err := p.agent.Annotate(ctx, "error", "failed_test", []byte(testPreamble)); err != nil {
+		if err := p.agent.Annotate(ctx, "error", fmt.Sprintf("failed_test_%s", p.buildkiteJobID), []byte(fmt.Sprintf(testPreamble, p.buildkiteJobID))); err != nil {
 			return err
 		}
 	}
@@ -289,7 +300,7 @@ func (p *BuildkitePlugin) annotateFailedTests(ctx context.Context) error {
 		// If the test failed, annotate and upload the artifact.
 		if result.Failed() {
 			m := renderFailedTestMarkdown(ctx, result)
-			if err := p.agent.Annotate(ctx, "error", "failed_test", []byte(m)); err != nil {
+			if err := p.agent.Annotate(ctx, "error", fmt.Sprintf("failed_test_%s", p.buildkiteJobID), []byte(m)); err != nil {
 				return err
 			}
 			if testLogPath != "" {
