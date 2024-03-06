@@ -48,6 +48,9 @@ type BuildkitePlugin struct {
 	// the token from or defaults to read it from "$BUILDKITE_ANALYTICS_TOKEN".
 	buildkiteAnalyticsToken string
 
+	// annotationsEnabled determines whether we should post annotations or not
+	annotationsEnabled bool
+
 	// isPreamblePosted tells us if we have posted or not the preamble, as we don't have
 	// a final or first hook to run things before or after the completion of the entire build.
 	isPreamblePosted bool
@@ -70,6 +73,9 @@ type pluginProperties struct {
 	// BuildkiteAnalyticsTokenName is the name of the env var we should be reading
 	// the token from. The default env var name is "BUILDKITE_ANALYTICS_TOKEN".
 	BuildkiteAnalyticsTokenName string `yaml:"buildkite_analytics_env_name"`
+
+	// EnableAnnotations enables whether we should post annotations or not
+	EnableAnnotations bool `yaml:"enable_annotations"`
 }
 
 // failedAction is small struct to hold the results from a failed action.
@@ -173,6 +179,8 @@ func (p *BuildkitePlugin) Setup(config *aspectplugin.SetupConfig) error {
 		return fmt.Errorf("failed to setup: failed to parse properties: %w", err)
 	}
 
+	p.annotationsEnabled = props.EnableAnnotations
+
 	// Read the BuildkiteAnalytics token from the env.
 	tokvar := props.BuildkiteAnalyticsTokenName
 	if tokvar == "" {
@@ -248,11 +256,13 @@ func (p *BuildkitePlugin) hook(_ bool, pr ioutils.PromptRunner) error {
 	}
 
 	ctx := context.Background()
-	if err := p.annotateFailedTests(ctx); err != nil {
-		return err
-	}
-	if err := p.annotateFailedActions(ctx); err != nil {
-		return err
+	if p.annotationsEnabled {
+		if err := p.annotateFailedTests(ctx); err != nil {
+			return err
+		}
+		if err := p.annotateFailedActions(ctx); err != nil {
+			return err
+		}
 	}
 	if err := p.postTestAnalytics(ctx); err != nil {
 		return err
@@ -270,7 +280,7 @@ var testPreamble = `#### Failures
 :bulb: You can run the following failed test targets with ` + "`" + `bazel test [target]` + "`" + ` locally on your
 machine to reproduce the issues and iterate faster than having to wait for the CI again.
 
-If a particular test target is too slow locally, you can also use ` + "`" + `sg ci bazel test [target]` + "`" + ` to have the CI run that 
+If a particular test target is too slow locally, you can also use ` + "`" + `sg ci bazel test [target]` + "`" + ` to have the CI run that
 particular target only.
 
 
