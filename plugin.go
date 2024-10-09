@@ -58,6 +58,12 @@ type BuildkitePlugin struct {
 	// buildkiteJobID stores the current job ID, useful to distinguish annotations when multiple jobs
 	// involving Bazel are run in a build.
 	buildkiteJobID string
+
+	// testLabelPrefix is what all test labels will be prefixed with when they are submitted to the the analytics api
+	testLabelPrefix string
+
+	// dryRun when enabled will let the plugin not post to actual apis instead write results locally
+	dryRun bool
 }
 
 type pluginProperties struct {
@@ -119,7 +125,7 @@ func (tr *testResultInfo) FailureReason() string {
 	}
 }
 
-func (tr *testResultInfo) AnalyticsPayload(testLogPath string) (*AnalyticsTestPayload, error) {
+func (tr *testResultInfo) AnalyticsPayload(labelPrefix string, testLogPath string) (*AnalyticsTestPayload, error) {
 	result := "passed"
 	failureExpanded := []map[string][]string{}
 	var failureReason *string
@@ -155,7 +161,7 @@ func (tr *testResultInfo) AnalyticsPayload(testLogPath string) (*AnalyticsTestPa
 
 	return &AnalyticsTestPayload{
 		ID:              uuid.NewString(),
-		Name:            tr.label,
+		Name:            labelPrefix + tr.label,
 		Result:          result,
 		FailureReason:   failureReason,
 		FailureExpanded: failureExpanded,
@@ -196,7 +202,11 @@ func (p *BuildkitePlugin) Setup(config *aspectplugin.SetupConfig) error {
 		p.agent = NewBuildkiteAgent(props.BuildkiteAgentPath)
 	} else {
 		p.agent = NewMockBuildkiteAgent(props.BuildkiteAgentPath)
+		p.dryRun = true
 	}
+
+	// Set the TestLabelPrefix - if it's empty, the label effectively will stay the same ...
+	p.testLabelPrefix = os.Getenv("TEST_ANALYTICS_PREFIX")
 
 	// Create a client to read URIs, as they can be files or bytestream if a remote-cache is enabled.
 	p.outputClient = outputfile.NewClient()
@@ -204,9 +214,16 @@ func (p *BuildkitePlugin) Setup(config *aspectplugin.SetupConfig) error {
 	return nil
 }
 
+func (p *BuildkitePlugin) pluginEnabled() bool {
+	if p.dryRun {
+		return true
+	}
+	return p.inBuildkite()
+}
+
 // BEPEventCallback subscribes to all Build Events, and lets our logic react to ones we care about.
 func (p *BuildkitePlugin) BEPEventCallback(event *buildeventstream.BuildEvent) error {
-	if !p.inBuildkite() {
+	if !p.pluginEnabled() {
 		return nil
 	}
 
@@ -251,8 +268,11 @@ func (p *BuildkitePlugin) PostRunHook(interactive bool, pr ioutils.PromptRunner)
 }
 
 func (p *BuildkitePlugin) hook(_ bool, pr ioutils.PromptRunner) error {
-	if !p.inBuildkite() {
+	if !p.pluginEnabled() {
 		return nil
+	} else if p.dryRun {
+		fmt.Println("--- Dry run [START] ---")
+		defer fmt.Println("--- Dry run [ END ] ---")
 	}
 
 	ctx := context.Background()
@@ -351,15 +371,17 @@ func (p *BuildkitePlugin) postTestAnalytics(ctx context.Context) error {
 			}
 		}
 
-		payload, err := result.AnalyticsPayload(testLogPath)
+		payload, err := result.AnalyticsPayload(p.testLabelPrefix, testLogPath)
 		if err != nil {
 			return err
 		}
 		payloads = append(payloads, payload)
 	}
 
-	if p.buildkiteAnalyticsToken != "" {
-		// return SaveTestResults(payloads)
+	if p.dryRun {
+		fmt.Println("savings results payload test results to: testresults.json")
+		return SaveTestResults(payloads)
+	} else if p.buildkiteAnalyticsToken != "" {
 		return PostResults(ctx, p.buildkiteAnalyticsToken, payloads)
 	}
 	return nil
