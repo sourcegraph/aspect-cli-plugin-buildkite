@@ -360,6 +360,7 @@ func (p *BuildkitePlugin) postTestAnalytics(ctx context.Context) error {
 	payloads := []*AnalyticsTestPayload{}
 	for _, result := range p.testResultInfos {
 		var testLogPath string
+		var testXMLPath string
 
 		for _, f := range result.result.GetTestActionOutput() {
 			if f.GetName() == "test.log" {
@@ -368,6 +369,24 @@ func (p *BuildkitePlugin) postTestAnalytics(ctx context.Context) error {
 					return err
 				}
 				testLogPath = path
+			}
+			if f.GetName() == "test.xml" {
+				path, err := p.outputClient.GetFilePath(ctx, f.GetUri(), f.GetName())
+				if err != nil {
+					return err
+				}
+				testXMLPath = path
+			}
+		}
+
+		// Handle JUnit XML upload for the specific target
+		if result.label == "//testing:backend_integration_test" && testXMLPath != "" {
+			if p.dryRun {
+				fmt.Printf("Would upload JUnit XML for target %s: %s\n", result.label, testXMLPath)
+			} else if p.buildkiteAnalyticsToken != "" {
+				if err := PostJUnitXML(ctx, p.buildkiteAnalyticsToken, testXMLPath); err != nil {
+					return fmt.Errorf("failed to upload JUnit XML for %s: %w", result.label, err)
+				}
 			}
 		}
 
