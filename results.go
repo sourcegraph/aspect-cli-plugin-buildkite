@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -117,4 +118,63 @@ func SaveTestResults(res []*AnalyticsTestPayload) error {
 	}
 	defer f.Close()
 	return json.NewEncoder(f).Encode(res)
+}
+
+// PostJUnitXML uploads a JUnit XML file to Buildkite Test Analytics
+func PostJUnitXML(ctx context.Context, token string, xmlFilePath string) error {
+	if token == "" {
+		return nil
+	}
+
+	xmlFile, err := os.Open(xmlFilePath)
+	if err != nil {
+		return err
+	}
+	defer xmlFile.Close()
+
+	var buf bytes.Buffer
+	formWriter := multipart.NewWriter(&buf)
+
+	formWriter.WriteField("format", "junit")
+	formWriter.WriteField("run_env[CI]", "buildkite")
+	formWriter.WriteField("run_env[key]", os.Getenv("BUILDKITE_BUILD_ID"))
+	formWriter.WriteField("run_env[url]", os.Getenv("BUILDKITE_BUILD_URL"))
+	formWriter.WriteField("run_env[branch]", os.Getenv("BUILDKITE_BRANCH"))
+	formWriter.WriteField("run_env[commit_sha]", os.Getenv("BUILDKITE_COMMIT"))
+	formWriter.WriteField("run_env[number]", os.Getenv("BUILDKITE_BUILD_NUMBER"))
+	formWriter.WriteField("run_env[job_id]", os.Getenv("BUILDKITE_JOB_ID"))
+	formWriter.WriteField("run_env[message]", os.Getenv("BUILDKITE_MESSAGE"))
+
+	part, err := formWriter.CreateFormFile("data", "test.xml")
+	if err != nil {
+		return err
+	}
+
+	if _, err := io.Copy(part, xmlFile); err != nil {
+		return err
+	}
+
+	if err := formWriter.Close(); err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest("POST", "https://analytics-api.buildkite.com/v1/uploads", &buf)
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Authorization", fmt.Sprintf("Token token=\"%s\"", token))
+	req.Header.Set("Content-Type", formWriter.FormDataContentType())
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	} else {
+		return errors.New(fmt.Sprintf("failed to upload JUnit XML, status code = %d", resp.StatusCode))
+	}
 }

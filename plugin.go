@@ -62,6 +62,9 @@ type BuildkitePlugin struct {
 	// testLabelPrefix is what all test labels will be prefixed with when they are submitted to the the analytics api
 	testLabelPrefix string
 
+	// junitXMLTargets is a list of test targets that should have their JUnit XML uploaded
+	junitXMLTargets []string
+
 	// dryRun when enabled will let the plugin not post to actual apis instead write results locally
 	dryRun bool
 }
@@ -82,6 +85,9 @@ type pluginProperties struct {
 
 	// EnableAnnotations enables whether we should post annotations or not
 	EnableAnnotations bool `yaml:"enable_annotations"`
+
+	// JUnitXMLTargets is a list of test targets that should have their JUnit XML uploaded
+	JUnitXMLTargets []string `yaml:"junit_xml_targets"`
 }
 
 // failedAction is small struct to hold the results from a failed action.
@@ -208,6 +214,9 @@ func (p *BuildkitePlugin) Setup(config *aspectplugin.SetupConfig) error {
 	// Set the TestLabelPrefix - if it's empty, the label effectively will stay the same ...
 	p.testLabelPrefix = os.Getenv("TEST_ANALYTICS_PREFIX")
 
+	// Set the JUnit XML targets
+	p.junitXMLTargets = props.JUnitXMLTargets
+
 	// Create a client to read URIs, as they can be files or bytestream if a remote-cache is enabled.
 	p.outputClient = outputfile.NewClient()
 
@@ -219,6 +228,16 @@ func (p *BuildkitePlugin) pluginEnabled() bool {
 		return true
 	}
 	return p.inBuildkite()
+}
+
+// shouldUploadJUnitXML checks if the given target label should have its JUnit XML uploaded
+func (p *BuildkitePlugin) shouldUploadJUnitXML(label string) bool {
+	for _, target := range p.junitXMLTargets {
+		if target == label {
+			return true
+		}
+	}
+	return false
 }
 
 // BEPEventCallback subscribes to all Build Events, and lets our logic react to ones we care about.
@@ -360,6 +379,7 @@ func (p *BuildkitePlugin) postTestAnalytics(ctx context.Context) error {
 	payloads := []*AnalyticsTestPayload{}
 	for _, result := range p.testResultInfos {
 		var testLogPath string
+		var testXMLPath string
 
 		for _, f := range result.result.GetTestActionOutput() {
 			if f.GetName() == "test.log" {
@@ -368,6 +388,24 @@ func (p *BuildkitePlugin) postTestAnalytics(ctx context.Context) error {
 					return err
 				}
 				testLogPath = path
+			}
+			if f.GetName() == "test.xml" {
+				path, err := p.outputClient.GetFilePath(ctx, f.GetUri(), f.GetName())
+				if err != nil {
+					return err
+				}
+				testXMLPath = path
+			}
+		}
+
+		// Handle JUnit XML upload for configured targets
+		if p.shouldUploadJUnitXML(result.label) && testXMLPath != "" {
+			if p.dryRun {
+				fmt.Printf("Would upload JUnit XML for target %s: %s\n", result.label, testXMLPath)
+			} else if p.buildkiteAnalyticsToken != "" {
+				if err := PostJUnitXML(ctx, p.buildkiteAnalyticsToken, testXMLPath); err != nil {
+					return fmt.Errorf("failed to upload JUnit XML for %s: %w", result.label, err)
+				}
 			}
 		}
 
