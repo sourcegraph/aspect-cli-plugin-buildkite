@@ -60,6 +60,41 @@ func PostResults(ctx context.Context, token string, results []*AnalyticsTestPayl
 	return nil
 }
 
+// addBuildkiteEnvFields adds common Buildkite environment fields to a form writer
+func addBuildkiteEnvFields(formWriter *multipart.Writer) {
+	formWriter.WriteField("run_env[CI]", "buildkite")
+	formWriter.WriteField("run_env[key]", os.Getenv("BUILDKITE_BUILD_ID"))
+	formWriter.WriteField("run_env[url]", os.Getenv("BUILDKITE_BUILD_URL"))
+	formWriter.WriteField("run_env[branch]", os.Getenv("BUILDKITE_BRANCH"))
+	formWriter.WriteField("run_env[commit_sha]", os.Getenv("BUILDKITE_COMMIT"))
+	formWriter.WriteField("run_env[number]", os.Getenv("BUILDKITE_BUILD_NUMBER"))
+	formWriter.WriteField("run_env[job_id]", os.Getenv("BUILDKITE_JOB_ID"))
+	formWriter.WriteField("run_env[message]", os.Getenv("BUILDKITE_MESSAGE"))
+}
+
+// postToAnalytics sends a POST request to the Buildkite Analytics API
+func postToAnalytics(ctx context.Context, token string, buf *bytes.Buffer, formWriter *multipart.Writer) error {
+	req, err := http.NewRequest("POST", "https://analytics-api.buildkite.com/v1/uploads", buf)
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Authorization", fmt.Sprintf("Token token=\"%s\"", token))
+	req.Header.Set("Content-Type", formWriter.FormDataContentType())
+
+	resp, err := http.DefaultClient.Do(req.WithContext(ctx))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	} else {
+		return errors.New(fmt.Sprintf("status code = %d", resp.StatusCode))
+	}
+}
+
 func postResults(ctx context.Context, token string, results []*AnalyticsTestPayload) error {
 	var buf bytes.Buffer
 	formWriter := multipart.NewWriter(&buf)
@@ -70,14 +105,7 @@ func postResults(ctx context.Context, token string, results []*AnalyticsTestPayl
 	}
 
 	formWriter.WriteField("format", "json")
-	formWriter.WriteField("run_env[CI]", "buildkite")
-	formWriter.WriteField("run_env[key]", os.Getenv("BUILDKITE_BUILD_ID"))
-	formWriter.WriteField("run_env[url]", os.Getenv("BUILDKITE_BUILD_URL"))
-	formWriter.WriteField("run_env[branch]", os.Getenv("BUILDKITE_BRANCH"))
-	formWriter.WriteField("run_env[commit_sha]", os.Getenv("BUILDKITE_COMMIT"))
-	formWriter.WriteField("run_env[number]", os.Getenv("BUILDKITE_BUILD_NUMBER"))
-	formWriter.WriteField("run_env[job_id]", os.Getenv("BUILDKITE_JOB_ID"))
-	formWriter.WriteField("run_env[message]", os.Getenv("BUILDKITE_MESSAGE"))
+	addBuildkiteEnvFields(formWriter)
 
 	part, err := formWriter.CreateFormField("data")
 	if err != nil {
@@ -90,25 +118,7 @@ func postResults(ctx context.Context, token string, results []*AnalyticsTestPayl
 		return err
 	}
 
-	req, err := http.NewRequest("POST", "https://analytics-api.buildkite.com/v1/uploads", &buf)
-	if err != nil {
-		return err
-	}
-
-	req.Header.Set("Authorization", fmt.Sprintf("Token token=\"%s\"", token))
-	req.Header.Set("Content-Type", formWriter.FormDataContentType())
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 200 {
-		return nil
-	} else {
-		return errors.New(fmt.Sprintf("status code = %d", resp.StatusCode))
-	}
+	return postToAnalytics(ctx, token, &buf, formWriter)
 }
 
 func SaveTestResults(res []*AnalyticsTestPayload) error {
@@ -136,14 +146,7 @@ func PostJUnitXML(ctx context.Context, token string, xmlFilePath string) error {
 	formWriter := multipart.NewWriter(&buf)
 
 	formWriter.WriteField("format", "junit")
-	formWriter.WriteField("run_env[CI]", "buildkite")
-	formWriter.WriteField("run_env[key]", os.Getenv("BUILDKITE_BUILD_ID"))
-	formWriter.WriteField("run_env[url]", os.Getenv("BUILDKITE_BUILD_URL"))
-	formWriter.WriteField("run_env[branch]", os.Getenv("BUILDKITE_BRANCH"))
-	formWriter.WriteField("run_env[commit_sha]", os.Getenv("BUILDKITE_COMMIT"))
-	formWriter.WriteField("run_env[number]", os.Getenv("BUILDKITE_BUILD_NUMBER"))
-	formWriter.WriteField("run_env[job_id]", os.Getenv("BUILDKITE_JOB_ID"))
-	formWriter.WriteField("run_env[message]", os.Getenv("BUILDKITE_MESSAGE"))
+	addBuildkiteEnvFields(formWriter)
 
 	part, err := formWriter.CreateFormFile("data", "test.xml")
 	if err != nil {
@@ -158,23 +161,5 @@ func PostJUnitXML(ctx context.Context, token string, xmlFilePath string) error {
 		return err
 	}
 
-	req, err := http.NewRequest("POST", "https://analytics-api.buildkite.com/v1/uploads", &buf)
-	if err != nil {
-		return err
-	}
-
-	req.Header.Set("Authorization", fmt.Sprintf("Token token=\"%s\"", token))
-	req.Header.Set("Content-Type", formWriter.FormDataContentType())
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return nil
-	} else {
-		return errors.New(fmt.Sprintf("failed to upload JUnit XML, status code = %d", resp.StatusCode))
-	}
+	return postToAnalytics(ctx, token, &buf, formWriter)
 }

@@ -402,10 +402,8 @@ func (p *BuildkitePlugin) postTestAnalytics(ctx context.Context) error {
 		if p.shouldUploadJUnitXML(result.label) && testXMLPath != "" {
 			if p.dryRun {
 				fmt.Printf("Would upload JUnit XML for target %s: %s\n", result.label, testXMLPath)
-			} else if p.buildkiteAnalyticsToken != "" {
-				if err := PostJUnitXML(ctx, p.buildkiteAnalyticsToken, testXMLPath); err != nil {
-					return fmt.Errorf("failed to upload JUnit XML for %s: %w", result.label, err)
-				}
+			} else if err := PostJUnitXML(ctx, p.buildkiteAnalyticsToken, testXMLPath); err != nil {
+				return fmt.Errorf("failed to upload JUnit XML for %s: %w", result.label, err)
 			}
 		}
 
@@ -419,10 +417,9 @@ func (p *BuildkitePlugin) postTestAnalytics(ctx context.Context) error {
 	if p.dryRun {
 		fmt.Println("savings results payload test results to: testresults.json")
 		return SaveTestResults(payloads)
-	} else if p.buildkiteAnalyticsToken != "" {
+	} else {
 		return PostResults(ctx, p.buildkiteAnalyticsToken, payloads)
 	}
-	return nil
 }
 
 func renderFailedTestMarkdown(ctx context.Context, ft *testResultInfo) string {
