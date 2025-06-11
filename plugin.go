@@ -48,6 +48,10 @@ type BuildkitePlugin struct {
 	// the token from or defaults to read it from "$BUILDKITE_ANALYTICS_TOKEN".
 	buildkiteAnalyticsToken string
 
+	// junitXMLBuildkiteAnalyticsToken is the analytics token for JUnit XML
+	// uploads. A seperate token since this is more detailed/verbose results.
+	junitXMLBuildkiteAnalyticsToken string
+
 	// annotationsEnabled determines whether we should post annotations or not
 	annotationsEnabled bool
 
@@ -82,6 +86,10 @@ type pluginProperties struct {
 	// BuildkiteAnalyticsTokenName is the name of the env var we should be reading
 	// the token from. The default env var name is "BUILDKITE_ANALYTICS_TOKEN".
 	BuildkiteAnalyticsTokenName string `yaml:"buildkite_analytics_env_name"`
+
+	// JUnitXMLBuildkiteAnalyticsTokenName is the name of the env var we should
+	// be reading the token from for JUnit XML uploads.
+	JUnitXMLBuildkiteAnalyticsTokenName string `yaml:"junit_xml_buildkite_analytics_env_name"`
 
 	// EnableAnnotations enables whether we should post annotations or not
 	EnableAnnotations bool `yaml:"enable_annotations"`
@@ -199,6 +207,11 @@ func (p *BuildkitePlugin) Setup(config *aspectplugin.SetupConfig) error {
 		tokvar = "BUILDKITE_ANALYTICS_TOKEN"
 	}
 	p.buildkiteAnalyticsToken = os.Getenv(tokvar)
+
+	// Read the BuildkiteAnalytics token for JUnitXML from the env.
+	if envvar := props.JUnitXMLBuildkiteAnalyticsTokenName; envvar != "" {
+		p.junitXMLBuildkiteAnalyticsToken = os.Getenv(envvar)
+	}
 
 	// Read the Buildkite Job ID
 	p.buildkiteJobID = os.Getenv("BUILDKITE_JOB_ID")
@@ -402,7 +415,7 @@ func (p *BuildkitePlugin) postTestAnalytics(ctx context.Context) error {
 		if p.shouldUploadJUnitXML(result.label) && testXMLPath != "" {
 			if p.dryRun {
 				fmt.Printf("Would upload JUnit XML for target %s: %s\n", result.label, testXMLPath)
-			} else if err := PostJUnitXML(ctx, p.buildkiteAnalyticsToken, testXMLPath); err != nil {
+			} else if err := PostJUnitXML(ctx, p.junitXMLBuildkiteAnalyticsToken, testXMLPath); err != nil {
 				return fmt.Errorf("failed to upload JUnit XML for %s: %w", result.label, err)
 			}
 		}
